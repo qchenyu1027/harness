@@ -140,6 +140,8 @@ class Proposer:
         directory is destroyed -- e.g. "context/harness", which is how an edited tree comes back.
         """
 
+        if self.spec.kind == "chat_completions":
+            raise ProposerError("Use harness2.robot.proposer.HttpProposer for chat_completions")
         cache_key = _call_fingerprint(label, mission, system, context_dir)
         cached = self._cached(label, cache_key, require_workspace=bool(harvest))
         if cached is not None:

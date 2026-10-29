@@ -30,7 +30,7 @@ from .tree import SurfaceSpec
 
 ModelId = str
 
-CHANNELS = ("claude_cli", "opencode")
+CHANNELS = ("claude_cli", "opencode", "chat_completions")
 
 
 @dataclass(frozen=True)
@@ -68,6 +68,8 @@ def resolve_channel_model(
     if kind not in CHANNELS:
         raise ValueError(f"unknown channel {kind!r}; expected one of {CHANNELS}")
     if model is None:
+        if kind == "chat_completions":
+            raise ValueError("chat_completions requires an explicit model")
         model = config.PROPOSER_MODEL_BY_CHANNEL[kind]
     if not model.strip():
         if use_default:
