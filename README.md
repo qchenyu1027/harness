@@ -78,6 +78,22 @@ inside the tool loop.
   </a>
 </p>
 
+## Robot extension / 机器人功能
+
+This checkout includes a standalone robot extension using one Chat Completions model for
+execution and harness improvement, with mock-only refinement and independent rule grading.
+It reuses the original Harness² core and does not import Move Agent or require OpenCode/Bun
+for this native HTTP path. See [机器人使用说明](docs/ROBOT.md).
+
+```bash
+python3 -m harness2.cli.robot demo --out runs/robot-demo-1
+python3 -m harness2.cli.robot check
+python3 -m harness2.cli.robot run "先到2号位置，抓取标签5，再到3号位置"
+```
+
+The demo is scripted and requires no LLM; `check` and `run` use the configured model.
+Robot actions default to a mock backend. Only explicit `run --real` submits real actions.
+
 ## Install
 
 Use **Linux, Python 3.12, and [uv](https://docs.astral.sh/uv/getting-started/installation/)**.
