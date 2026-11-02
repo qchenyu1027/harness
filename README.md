@@ -55,6 +55,7 @@ https://github.com/user-attachments/assets/76b10548-b14b-4c8f-9aa5-a93662df4d56
 
 - [Video overview](#video-overview)
 - [Harness components](#harness-components)
+- [Robot extension / 机器人功能](#robot-extension--机器人功能)
 - [Install](#install)
 - [Run a benchmark](#run-a-benchmark)
 - [Experiments](#experiments)
@@ -80,19 +81,156 @@ inside the tool loop.
 
 ## Robot extension / 机器人功能
 
-This checkout includes a standalone robot extension using one Chat Completions model for
-execution and harness improvement, with mock-only refinement and independent rule grading.
-It reuses the original Harness² core and does not import Move Agent or require OpenCode/Bun
-for this native HTTP path. See [机器人使用说明](docs/ROBOT.md).
+### 项目定位
 
-```bash
-python3 -m harness2.cli.robot demo --out runs/robot-demo-1
-python3 -m harness2.cli.robot check
-python3 -m harness2.cli.robot run "先到2号位置，抓取标签5，再到3号位置"
+本仓库是在原始 Harness² 上增加的机器人任务扩展，不是独立的 Move Agent，也没有把
+RPent 整体搬进来。它复用 Harness² 的递归改进、候选选择、经验库和规则评分能力，新增
+了一个受约束的机器人执行循环：大模型负责理解中文指令和生成完整计划，可信 Python
+代码负责校验计划、串行调用动作、处理取消与失败。
+
+当前使用同一个 OpenAI Chat Completions 兼容模型完成机器人任务规划和 Harness 配置改进。
+默认模型配置为远程 `Qwen3.5-27B`；连接参数从仓库根目录 `.env` 读取。
+
+```text
+用户中文指令
+    → Qwen 生成完整动作计划
+    → Harness² 校验工具、参数、顺序和最多五步限制
+    → FastAPI 工具网关
+    → 配置中的 move_robot 或 grasp_clothes 实现
+    → 记录结构化结果，失败或状态未知时立即停止
 ```
 
-The demo is scripted and requires no LLM; `check` and `run` use the configured model.
-Robot actions default to a mock backend. Only explicit `run --real` submits real actions.
+### 当前能力
+
+| 功能 | 实现 | 范围 |
+|---|---|---|
+| FastAPI 网关 | 对外提供健康检查、工具列表、执行和取消接口 | 实现由 JSON 配置加载 |
+| 底盘移动 | 网关代理机器人 HTTP 服务的 `/health`、`/move`、`/cancel` | 仅预设位置 1、2、3 |
+| 抓衣服 | 网关启动配置中的 RPent 进程 | 固定衣服工位、右臂、右夹爪 |
+| 模拟执行 | `MockRobot` | 不连接真机，用于调试计划和回归测试 |
+| Harness 改进 | 复用原始递归、选择、经验库和 Judge | 候选只允许修改 Markdown 配置 |
+
+抓衣动作复用 RPent 已记录的 `home → prepare → grasp → 闭合右夹爪 → 持物回位`
+关节序列，固定使用 `--home-mode direct --gripper-side right`。它不再调用原来的
+AprilTag 抓取，也没有加入彩色方块、ACT、Pi0.5、放置或松开功能。
+
+新鱼眼相机目前不参与抓取点计算。抓衣前必须确保底盘已经位于标定的衣服工位，衣服
+摆放与记录点位一致；系统不会擅自追加导航动作，也不会声称已经通过视觉确认抓牢。
+
+### 环境安装
+
+项目使用独立 Conda 环境 `harness_test`：
+
+```bash
+conda activate harness_test
+cd /home/tjzn-zwt/Aqqqcy/github/harness
+```
+
+该环境使用 Python 3.12，并以可编辑模式安装当前仓库。Harness/LLM 在
+`harness_test` 中运行；RPent 抓衣子进程固定使用 ROS Humble 兼容的
+`/usr/bin/python3`，避免 Conda Python 与 ROS 二进制扩展冲突。
+
+机器人运行文件保存在项目自己的路径下：
+
+```text
+robot_runtime/
+├── luna_ros_overlay/          # Luna marvin_msgs overlay
+├── ros_deps/                  # 项目本地 CycloneDDS，无需 sudo
+└── Apex_Deploy/               # 可选的 Luna Apex 工作区
+```
+
+这些编译产物不会提交到 Git。环境入口为
+`harness2/robot/config/luna_ros_env.sh`，启动机械臂前会验证 ROS、CycloneDDS、
+`marvin_msgs` 和抓衣脚本是否可用。
+
+工具实现不写在 Harness 客户端中，而是由
+`harness2/robot/config/robot_tools.json` 配置。FastAPI 网关提供通用 HTTP 与进程执行器；
+`backend.py` 只负责调用网关。工具名称与参数范围仍由可信代码校验，不能通过接口绕过
+位置白名单。该 JSON 能决定真机命令，属于可信本地配置，不能开放给前端或非受信用户编辑。
+
+### 配置模型
+
+本地密钥只写入 `.env`，不要提交到 Git：
+
+```dotenv
+ROBOT_LLM_BASE_URL=http://192.168.100.212:8000/v1
+ROBOT_LLM_MODEL=Qwen3.5-27B
+ROBOT_LLM_API_KEY=服务器实际密钥
+ROBOT_LLM_TIMEOUT_S=300
+```
+
+检查模型连接，不连接机器人：
+
+```bash
+harness2-check-llm
+```
+
+### 使用方法
+
+先在终端 1 启动本机 FastAPI 工具网关：
+
+```bash
+conda activate harness_test
+cd /home/tjzn-zwt/Aqqqcy/github/harness
+harness2-robot-api --host 127.0.0.1 --port 8090
+```
+
+接口文档位于 `http://127.0.0.1:8090/docs`。直接通过 FastAPI 调用抓衣工具：
+
+```bash
+curl -X POST http://127.0.0.1:8090/tools/grasp_clothes/execute \
+  -H 'Content-Type: application/json' \
+  -d '{"arguments":{}}'
+```
+
+上面的接口会执行真实工具。只检查抓衣环境时使用：
+
+```bash
+curl http://127.0.0.1:8090/tools/grasp_clothes/health
+```
+
+默认是模拟机器人，即使 `.env` 中存在真机配置也不会自动连接：
+
+```bash
+harness2-robot run "请移动到2号位置"
+harness2-robot run "抓住工位上的衣服"
+harness2-robot run "先到2号位置，抓衣服，再到3号位置"
+```
+
+在终端 2 中，只有显式添加 `--real` 才会让 Harness 通过 FastAPI 提交真实动作：
+
+```bash
+harness2-robot run "抓住工位上的衣服" --real
+```
+
+运行真机前必须确认工作区无人、机器人已在正确工位、衣服摆放正确、急停可用。软件取消
+不能替代物理急停；动作超时或子进程异常时，机械臂和夹爪状态按“未知”处理，不自动重试。
+
+离线演示与测试：
+
+```bash
+harness2-robot demo --out runs/robot-demo-1
+python -B -m unittest discover -s tests -q
+```
+
+### 主要代码
+
+| 路径 | 作用 |
+|---|---|
+| `harness2/cli/robot.py` | 机器人命令行入口 |
+| `harness2/robot/llm.py` | 唯一的 Chat Completions 模型连接 |
+| `harness2/robot/tools.py` | 可信动作 Schema 和参数白名单 |
+| `harness2/robot/runtime.py` | 完整计划校验、串行执行、失败停止和结果记录 |
+| `harness2/robot/backend.py` | 模拟后端和 FastAPI 工具网关客户端 |
+| `harness2/robot/api.py` | FastAPI 路由、认证和服务启动入口 |
+| `harness2/robot/gateway.py` | 配置驱动的 HTTP/进程工具执行器 |
+| `harness2/robot/config/robot_tools.json` | 移动与抓衣的具体实现配置 |
+| `harness2/robot/profile/` | System Prompt、Guardrails、Memory、工具指导和 Skills |
+| `harness2/robot/adapter.py` | Harness² 任务适配和独立规则评分 |
+| `harness2/robot/config/luna_ros_env.sh` | 项目本地 Luna/ROS/CycloneDDS 环境 |
+| `tests/test_robot.py` | 离线机器人集成回归测试 |
+
+更完整的配置、评分和递归改进说明见 [机器人使用说明](docs/ROBOT.md)。
 
 ## Install
 

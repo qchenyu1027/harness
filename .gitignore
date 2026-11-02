@@ -12,3 +12,5 @@ dist/
 .pytest_cache/
 .ruff_cache/
 runs/
+robot_runtime/*
+!robot_runtime/README.md

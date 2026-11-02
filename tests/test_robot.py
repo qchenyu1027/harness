@@ -1,18 +1,23 @@
 """Offline regressions: actual Harness² core, fake model and fake robot transport."""
 import json
-from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
 import urllib.error
+from pathlib import Path
 from unittest.mock import patch
 
+from harness2.cli.check_llm import check_connection
 from harness2.cli.robot import main, refine
 from harness2.core import context, judge
 from harness2.core.spec import resolve_channel_model
 from harness2.robot.adapter import CASES, RobotAdapter, score_result
+from harness2.robot.api import create_app
 from harness2.robot.backend import HttpRobot, MockRobot
 from harness2.robot.demo import DemoImprover, DemoModel, tool_reply
+from harness2.robot.gateway import ToolGateway
 from harness2.robot.llm import ChatModel, ModelSettings
 from harness2.robot.proposer import HttpProposer, file_operation
 from harness2.robot.runtime import DEFAULT_PROFILE, RobotExecutor, read_profile
@@ -42,11 +47,48 @@ def move(pose=2):
     return {"tool": "move_robot", "arguments": {"pose_id": pose}}
 
 
-def grasp(tag=5):
-    return {"tool": "grasp_object", "arguments": {"tag_id": tag}}
+def grasp():
+    return {"tool": "grasp_clothes", "arguments": {}}
 
 
 class RobotTests(unittest.TestCase):
+    def test_remote_qwen_defaults_and_compatible_environment_names(self):
+        self.assertEqual(ModelSettings.base_url, "http://192.168.100.212:8000/v1")
+        self.assertEqual(ModelSettings.model, "Qwen3.5-27B")
+        self.assertEqual(ModelSettings.timeout, 300)
+        names = {
+            "ROBOT_LLM_BASE_URL": "", "ROBOT_LLM_MODEL": "", "ROBOT_LLM_API_KEY": "",
+            "LLM_BASE_URL": "", "LLM_MODEL": "", "LLM_API_KEY": "",
+            "QWEN_BASE_URL": "http://qwen.test/v1/", "QWEN_MODEL": "remote-model",
+            "QWEN_API_KEY": "test-key", "ROBOT_LLM_TIMEOUT_S": "12",
+        }
+        with patch.dict("os.environ", names, clear=False):
+            settings = ModelSettings.from_env()
+        self.assertEqual(settings, ModelSettings(
+            "http://qwen.test/v1", "remote-model", "test-key", 12,
+        ))
+
+    def test_llm_check_reuses_chat_model_and_source_script_imports(self):
+        model = ScriptModel([{"content": "连接成功"}])
+        with patch("builtins.print") as output:
+            check_connection(model)
+        rendered = "\n".join(" ".join(str(arg) for arg in call.args) for call in output.call_args_list)
+        self.assertIn(model.settings.base_url, rendered)
+        self.assertIn(model.settings.model, rendered)
+        self.assertIn("LLM 连接成功", rendered)
+        self.assertEqual(model.messages[0][0]["content"], "只回复：连接成功")
+
+        script = Path(__file__).resolve().parents[1] / "scripts/check_llm.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Chat Completions", result.stdout)
+
     def test_all_thirteen_mock_cases_are_rule_graded(self):
         with tempfile.TemporaryDirectory() as root:
             adapter = RobotAdapter(DemoModel(), root)
@@ -60,7 +102,8 @@ class RobotTests(unittest.TestCase):
                     context.assert_no_grader_verdicts(run)
 
     def test_whole_plan_invalid_or_over_limit_never_checks_robot(self):
-        for steps in ([move(), grasp(9)], [move()] * 6, [move(True)], [grasp(3.0)]):
+        invalid_grasp = {"tool": "grasp_clothes", "arguments": {"tag_id": 9}}
+        for steps in ([move(), invalid_grasp], [move()] * 6, [move(True)]):
             with self.subTest(steps=steps):
                 robot = MockRobot()
                 result = RobotExecutor(ScriptModel([plan(steps)]), robot).run("测试")
@@ -69,13 +112,13 @@ class RobotTests(unittest.TestCase):
 
     def test_extra_parameters_and_unsupported_tools_are_rejected(self):
         for name, args in [("move_robot", {"pose_id": 2, "speed": 1}),
-                           ("grasp_object", {"offset-config": "other"}), ("shell", {})]:
+                           ("grasp_clothes", {"tag_id": 5}), ("shell", {})]:
             with self.subTest(name=name, args=args), self.assertRaises(ValueError):
                 normalize_action(name, args)
 
     def test_ids_normalize_only_whitelisted_integer_strings(self):
         self.assertEqual(normalize_action("move_robot", {"pose_id": " 2 "}), move())
-        self.assertEqual(normalize_action("grasp_object", {}), grasp())
+        self.assertEqual(normalize_action("grasp_clothes", {}), grasp())
         for value in (True, 2.0, "02", "+2", "2e0", "２", None, []):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 normalize_action("move_robot", {"pose_id": value})
@@ -89,7 +132,7 @@ class RobotTests(unittest.TestCase):
 
     def test_followup_must_match_plan_and_feedback(self):
         model = ScriptModel([plan([move(), grasp()]), tool_reply("move_robot", {"pose_id": "2"}),
-                             tool_reply("grasp_object", {"tag_id": 3})])
+                             tool_reply("grasp_clothes", {"tag_id": 3})])
         robot = MockRobot()
         result = RobotExecutor(model, robot).run("测试")
         self.assertEqual(result["status"], "rejected")
@@ -134,7 +177,7 @@ class RobotTests(unittest.TestCase):
 
     def test_complete_plan_ends_without_extra_model_action(self):
         model = ScriptModel([plan([move()]), tool_reply("move_robot", {"pose_id": 2}),
-                             tool_reply("grasp_object", {})])
+                             tool_reply("grasp_clothes", {})])
         result = RobotExecutor(model, MockRobot()).run("移动")
         self.assertEqual(result["status"], "completed")
         self.assertEqual(len(model.messages), 2)
@@ -191,7 +234,7 @@ class RobotTests(unittest.TestCase):
             self.assertIn("新增候选规则", (reply.workspace / "systemprompt.md").read_text())
             self.assertNotIn("新增候选规则", (evidence / "harness/systemprompt.md").read_text())
 
-    def test_real_transport_auth_calibration_and_error_status(self):
+    def test_fastapi_gateway_client_auth_payload_and_error_status(self):
         class Response:
             def __init__(self, data, status=200):
                 self.data, self.status = data, status
@@ -212,18 +255,112 @@ class RobotTests(unittest.TestCase):
         transport = Transport()
         robot = HttpRobot("http://robot.test", "test-key")
         with patch("urllib.request.build_opener", return_value=transport):
-            self.assertTrue(robot.health()["ready_for_motion"])
-            self.assertTrue(robot.submit(grasp(3))["ok"])
+            self.assertTrue(robot.health(move(1))["ready_for_motion"])
+            self.assertTrue(robot.submit(move(1))["ok"])
             self.assertFalse(robot.submit(move())["ok"])
         request = transport.requests[1]
         self.assertEqual(request.headers["X-api-key"], "test-key")
-        self.assertEqual(json.loads(request.data), {"tag_id": 3, "options": {
-            "offset-config": "tag3_left_tool_offset.yaml"}})
+        self.assertEqual(request.full_url, "http://robot.test/tools/move_robot/execute")
+        self.assertEqual(json.loads(request.data), {"arguments": {"pose_id": 1}})
 
-    def test_live_requires_explicit_endpoint_and_key(self):
-        with patch.dict("os.environ", {"ROBOT_API_BASE": "", "ROBOT_API_KEY": ""}):
+    def test_real_mode_requires_fastapi_gateway_but_api_key_is_optional_locally(self):
+        with patch.dict("os.environ", {"ROBOT_TOOL_API_BASE": "", "ROBOT_TOOL_API_KEY": ""}):
             with self.assertRaises(ValueError):
                 HttpRobot()
+        self.assertEqual(HttpRobot("http://127.0.0.1:8090", "").base_url,
+                         "http://127.0.0.1:8090")
+        with self.assertRaises(ValueError):
+            HttpRobot("not-a-url", "")
+
+    def test_configured_gateway_invokes_rpent_process_outside_client_backend(self):
+        class Process:
+            pid = 12345
+            def wait(self, timeout=None):
+                return 0
+            def poll(self):
+                return 0
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            script = root / "clothes.py"
+            setup = root / "setup.sh"
+            config = root / "tools.json"
+            python = Path("/usr/bin/python3")
+            for path in (script, setup):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            config.write_text(json.dumps({"tools": {"grasp_clothes": {
+                "description": "test", "kind": "process", "environment_script": str(setup),
+                "command": [str(python), str(script), "--execute", "--home-mode", "direct",
+                            "--gripper-side", "right"],
+                "health_arguments": ["--help"], "timeout_env": "TEST_TOOL_TIMEOUT",
+            }}}))
+            with patch.dict("os.environ", {"TEST_TOOL_TIMEOUT": "5"}):
+                gateway = ToolGateway(config)
+                self.assertTrue(gateway.health("grasp_clothes")["ready_for_motion"])
+            with patch.object(gateway, "health", return_value={
+                    "ok": True, "ready_for_motion": True}), \
+                    patch("subprocess.Popen", return_value=Process()) as launch:
+                self.assertTrue(gateway.execute("grasp_clothes", {})["ok"])
+            command = launch.call_args.args[0]
+            self.assertIn(str(script), command)
+            self.assertIn("--execute", command)
+            self.assertIn("direct", command)
+            self.assertIn("right", command)
+
+    def test_gateway_renders_http_tool_payload_from_configuration(self):
+        class Response:
+            status = 200
+            def __init__(self, body):
+                self.body = body
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self):
+                return json.dumps(self.body).encode()
+        class Transport:
+            def __init__(self):
+                self.requests = []
+                self.responses = iter([Response({"ok": True, "ready_for_motion": True}),
+                                       Response({"ok": True})])
+            def open(self, request, timeout=None):
+                self.requests.append(request)
+                return next(self.responses)
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "tools.json"
+            config.write_text(json.dumps({"tools": {"move_robot": {
+                "description": "test", "kind": "http", "base_url_env": "TEST_MOTION_URL",
+                "api_key_env": "TEST_MOTION_KEY", "health_path": "/health",
+                "execute_path": "/move", "cancel_path": "/cancel",
+                "payload": {"pose_ids": ["$args.pose_id"]},
+            }}}))
+            transport = Transport()
+            with patch.dict("os.environ", {"TEST_MOTION_URL": "http://motion.test",
+                                            "TEST_MOTION_KEY": "key"}), \
+                    patch("urllib.request.build_opener", return_value=transport):
+                self.assertTrue(ToolGateway(config).execute("move_robot", {"pose_id": 3})["ok"])
+            self.assertEqual(json.loads(transport.requests[1].data), {"pose_ids": [3]})
+
+    def test_fastapi_routes_expose_gateway_contract(self):
+        class Gateway:
+            tools = {"grasp_clothes": {}}
+            lock = threading.Lock()
+            def describe(self):
+                return [{"name": "grasp_clothes", "kind": "process", "description": "test"}]
+            def health(self, name):
+                return {"ok": True, "ready_for_motion": True}
+            def execute(self, name, arguments):
+                return {"ok": True, "name": name, "arguments": arguments}
+            def cancel(self):
+                return {"accepted": True}
+        with patch.dict("os.environ", {"ROBOT_TOOL_API_KEY": "secret"}):
+            try:
+                app = create_app(gateway=Gateway())
+            except RuntimeError:
+                self.skipTest("robot-api optional dependencies are not installed")
+        paths = {route.path for route in app.routes}
+        self.assertTrue({"/health", "/tools", "/tools/{name}/health",
+                         "/tools/{name}/execute", "/cancel"}.issubset(paths))
 
     def test_original_recursion_and_independent_judge_without_move_agent(self):
         for mode, k in (("parallel", 1), ("sequential", 2)):

@@ -13,6 +13,7 @@ from ..robot.backend import HttpRobot, MockRobot
 from ..robot.llm import ChatModel
 from ..robot.proposer import HttpProposer
 from ..robot.runtime import DEFAULT_PROFILE, RobotExecutor, fingerprint, read_profile
+from .check_llm import check_connection
 
 
 def dump(path, value):
@@ -72,7 +73,7 @@ def parser():
     sub.add_parser("check", help="只测试LLM，不连接机器人")
     run = sub.add_parser("run", help="运行一次任务，默认模拟机器人")
     run.add_argument("request")
-    run.add_argument("--real", action="store_true", help="显式连接真实机器人HTTP服务")
+    run.add_argument("--real", action="store_true", help="显式通过FastAPI工具网关执行真实动作")
     run.add_argument("--profile", type=Path, default=DEFAULT_PROFILE)
     run.add_argument("--out", type=Path)
     for name in ("evaluate", "refine", "demo"):
@@ -113,9 +114,7 @@ def main(argv=None):
                           selected_cases(args.cases), args.k, args.mode)
         model = ChatModel()
         if args.command == "check":
-            response = model.complete([{"role": "user", "content": "只回复：连接成功"}])
-            print("模型：", model.settings.model)
-            print(response.get("content", ""))
+            check_connection(model)
             return 0
         if args.command == "run":
             backend = HttpRobot() if args.real else MockRobot()

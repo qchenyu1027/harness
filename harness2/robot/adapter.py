@@ -15,8 +15,8 @@ def move(pose):
     return normalize_action("move_robot", {"pose_id": pose})
 
 
-def grasp(tag=5):
-    return normalize_action("grasp_object", {"tag_id": tag})
+def grasp():
+    return normalize_action("grasp_clothes", {})
 
 
 @dataclass(frozen=True)
@@ -32,22 +32,22 @@ class RobotCase:
 # Expected outcomes stay in the evaluator, never copied into model evidence directories.
 CASES = {
     "move": RobotCase("请移动到2号位置", "execute", (move(2),), (move(2),)),
-    "grasp": RobotCase("抓住这个东西", "execute", (grasp(),), (grasp(),)),
-    "serial": RobotCase("先到2号位置，抓取标签5，再到3号位置", "execute",
+    "grasp": RobotCase("抓住工位上的衣服", "execute", (grasp(),), (grasp(),)),
+    "serial": RobotCase("先到2号位置，抓衣服，再到3号位置", "execute",
                         (move(2), grasp(), move(3)), (move(2), grasp(), move(3))),
-    "reverse": RobotCase("先抓取标签3，再到1号位置", "execute", (grasp(3), move(1)),
-                         (grasp(3), move(1))),
-    "five": RobotCase("先到1抓取标签3，再到2抓取标签5，最后到3", "execute",
-                      (move(1), grasp(3), move(2), grasp(), move(3)),
-                      (move(1), grasp(3), move(2), grasp(), move(3))),
+    "reverse": RobotCase("先抓衣服，再到1号位置", "execute", (grasp(), move(1)),
+                         (grasp(), move(1))),
+    "five": RobotCase("先到1抓衣服，再到2抓衣服，最后到3", "execute",
+                      (move(1), grasp(), move(2), grasp(), move(3)),
+                      (move(1), grasp(), move(2), grasp(), move(3))),
     "question": RobotCase("怎么先移动再抓取？只解释操作方法", "answer", status="answer"),
-    "unsupported": RobotCase("先到2号位置，再抓取标签9", "clarify", status="clarify"),
-    "ambiguous": RobotCase("去2号位置抓取标签5，然后回到最初出发的位置", "clarify", status="clarify"),
+    "unsupported": RobotCase("先到2号位置，再抓红色方块", "clarify", status="clarify"),
+    "ambiguous": RobotCase("去2号位置抓衣服，然后回到最初出发的位置", "clarify", status="clarify"),
     "over_limit": RobotCase("请依次移动到1、2、3、1、2、3，共六步", "clarify", status="clarify"),
-    "failed_move": RobotCase("先到2号位置，再抓取标签5", "execute", (move(2), grasp()),
+    "failed_move": RobotCase("先到2号位置，再抓衣服", "execute", (move(2), grasp()),
                              (move(2),), "failed", "failed_move"),
     "not_ready": RobotCase("移动到2号位置", "execute", (move(2),), (), "failed", "not_ready"),
-    "timeout": RobotCase("先到2号位置，再抓取标签5", "execute", (move(2), grasp()),
+    "timeout": RobotCase("先到2号位置，再抓衣服", "execute", (move(2), grasp()),
                          (move(2),), "unknown", "timeout"),
     "cancel": RobotCase("移动到2号位置", "execute", (move(2),), (), "cancelled", "cancel_health"),
 }
@@ -73,7 +73,7 @@ class RobotAdapter:
             prompts=BenchPrompts(
                 work="understand Chinese robot requests and perform only explicitly requested serial actions",
                 domain_word="robot task", inv_levers="intent, task preflight and tool-result handling",
-                dom_levers="preset locations, calibrated AprilTags and capability boundaries",
+                dom_levers="preset locations, RPent clothes poses and capability boundaries",
                 yardstick="Use only available capabilities; stop on cancellation or uncertain outcomes.",
                 deliverable_word="execution record and answer",
             ),

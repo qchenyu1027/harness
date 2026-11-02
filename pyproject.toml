@@ -22,6 +22,7 @@ dependencies = []
 [project.optional-dependencies]
 render = ["openpyxl>=3.1,<4", "python-pptx>=1,<2"]
 bridge = ["litellm[proxy]==1.95.0", "fastapi==0.139.2", "google-auth==2.56.3"]
+robot-api = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1"]
 
 [project.scripts]
 harness2 = "harness2.cli.run_sweep:main"
@@ -29,15 +30,17 @@ harness2-judge = "harness2.cli.judge:main"
 harness2-report = "harness2.cli.report:main"
 harness2-setup = "harness2.cli.setup:main"
 harness2-check = "harness2.cli.check:main"
+harness2-check-llm = "harness2.cli.check_llm:main"
 harness2-demo = "harness2.cli.demo:main"
 harness2-bridge = "harness2.cli.bridge:main"
 harness2-robot = "harness2.cli.robot:main"
+harness2-robot-api = "harness2.robot.api:main"
 
 [tool.setuptools.packages.find]
 include = ["harness2*"]
 
 [tool.setuptools.package-data]
-"harness2.robot" = ["profile/*.md", "profile/tool_descriptions/*.md", "profile/skills/*/SKILL.md"]
+"harness2.robot" = ["profile/*.md", "profile/tool_descriptions/*.md", "profile/skills/*/SKILL.md", "config/*.json", "config/*.sh"]
 
 [tool.ruff]
 target-version = "py312"

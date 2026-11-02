@@ -2,7 +2,6 @@
 import json
 
 MAX_ACTIONS = 5
-CALIBRATIONS = {3: "tag3_left_tool_offset.yaml", 5: "tag5_left_tool_offset.yaml"}
 
 
 def function(name, description, properties, required=()):
@@ -18,18 +17,16 @@ ACTION_TOOLS = [
     function("move_robot", "移动到底盘预设位置1、2、3；不提供任意坐标导航。", {
         "pose_id": {"type": "integer", "enum": [1, 2, 3]},
     }, ("pose_id",)),
-    function("grasp_object", "现有左臂AprilTag抓取并抬起，标签3或5，省略时固定为5。", {
-        "tag_id": {"type": "integer", "enum": [3, 5]},
-    }),
+    function("grasp_clothes", "在衣服抓取工位执行RPent固定序列：双夹爪打开、右臂抓衣并夹紧、持物回位。", {}),
 ]
 
 PLAN_TOOL = function("plan_robot_task", "首次动作前提交完整任务；咨询/歧义不执行。", {
     "mode": {"type": "string", "enum": ["execute", "answer", "clarify"]},
     "message": {"type": "string", "description": "咨询回答或需要澄清的问题"},
     "steps": {"type": "array", "items": {"type": "object", "properties": {
-        "tool": {"type": "string", "enum": ["move_robot", "grasp_object"]},
+        "tool": {"type": "string", "enum": ["move_robot", "grasp_clothes"]},
         "arguments": {"type": "object", "properties": {
-            "pose_id": {"type": "integer"}, "tag_id": {"type": "integer"},
+            "pose_id": {"type": "integer"},
         }, "additionalProperties": False},
     }, "required": ["tool", "arguments"], "additionalProperties": False}},
 }, ("mode", "steps", "message"))
@@ -48,8 +45,8 @@ def normalize_action(name, arguments):
         raise ValueError("工具参数必须是对象")
     if name == "move_robot" and set(arguments) == {"pose_id"}:
         return {"tool": name, "arguments": {"pose_id": normalize_id(arguments["pose_id"], {1, 2, 3})}}
-    if name == "grasp_object" and set(arguments).issubset({"tag_id"}):
-        return {"tool": name, "arguments": {"tag_id": normalize_id(arguments.get("tag_id", 5), {3, 5})}}
+    if name == "grasp_clothes" and not arguments:
+        return {"tool": name, "arguments": {}}
     raise ValueError("工具或参数不受支持")
 
 

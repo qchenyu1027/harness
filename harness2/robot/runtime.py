@@ -65,7 +65,7 @@ class RobotExecutor:
                 self.stopped = True
                 return {"ok": False, "message": "超过五步预算"}
             action = normalize_action(action["tool"], action["arguments"])
-            health = self.backend.health()
+            health = self.backend.health(action)
             self.event("health", result=health)
             if self.cancel_event.is_set():
                 self.stopped = True
@@ -73,7 +73,8 @@ class RobotExecutor:
             if (health.get("http_status") != 200 or health.get("ok") is not True
                     or health.get("ready_for_motion") is not True):
                 self.stopped = True
-                return {"ok": False, "message": "机器人未就绪，未提交动作"}
+                detail = health.get("message", "机器人未就绪")
+                return {"ok": False, "message": f"{detail}，未提交动作"}
             entry = {**action, "result": {"ok": False, "result_unknown": True}}
             self.actions.append(entry)
             self.event("action_started", action=action)
@@ -171,7 +172,7 @@ class RobotExecutor:
             answer = plan["message"]
         else:
             labels = [f"移动到{a['arguments']['pose_id']}" if a["tool"] == "move_robot"
-                      else f"标签{a['arguments']['tag_id']}抓取流程" for a in completed]
+                      else "RPent抓衣流程" for a in completed]
             prefix = "执行端已确认：" + "、".join(labels) + "。" if labels else ""
             answer = prefix + ("指定步骤执行结束；尚无独立实物验证。" if status == "completed"
                               else f"任务已停止（{status}）。{error} 未执行更多动作。")
